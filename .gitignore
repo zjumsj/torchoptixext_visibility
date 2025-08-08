@@ -1,0 +1,12 @@
+*.pyc
+.vscode
+.idea
+
+build
+dist
+torchoptixext_visibility.egg-info
+
+DEBUG.txt
+
+__pycache__/
+**/__pycache__/

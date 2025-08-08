@@ -1,0 +1,283 @@
+import torch
+import os
+import sys
+
+from ctypes import *
+
+_src_path = os.path.dirname(os.path.abspath(__file__))
+
+if os.name == 'posix':
+    # linux os
+    cdll.LoadLibrary('LINUX_OPTIX_LIB_PATH')
+    cu_src_path = _src_path
+
+elif os.name == 'nt':
+    os.add_dll_directory('WIN_OPTIX_LIB_PATH')
+    cdll.LoadLibrary('WIN_NVRTC_LIB_PATH')
+    cu_src_path = _src_path
+
+import _torchoptixext_visibility as _backend
+# NVRTC: where to find .cu
+_backend.set_path(cu_src_path)
+
+# A Hello World Triangle ray-tracing
+def run_sample_code():
+    output = _backend.run_sample_code()
+    return output
+
+# OptixDist
+def optixDist_init(device='cuda:0'):
+    torch.cuda.set_device(device)
+    _backend.optixDist_init()
+
+def optixDist_destroy(device='cuda:0'):
+    torch.cuda.set_device(device)
+    _backend.optixDist_destroy()
+
+def optixDist_load_mesh(vertex_group, index_group):
+    """
+    Loads mesh data into the OptiX distance computation backend.
+
+    This function validates and transfers mesh geometry data to GPU-accelerated
+    distance computation routines. It requires all data to be in GPU memory
+    and properly formatted for OptiX processing.
+
+    Parameters:
+        vertex_group (list[torch.Tensor]): List of vertex buffers. Each element must be:
+            - A contiguous torch.Tensor on a CUDA device
+            - Shape: [V, 3] (V vertices with XYZ coordinates)
+            - Data type: torch.float32
+
+        index_group (list[torch.Tensor | None]): List of index buffers corresponding to vertices.
+            Each element must be either:
+            - None (indicating unindexed geometry)
+            - A contiguous torch.Tensor on a CUDA device with:
+                * Shape: [M, 3] (M triangles with vertex indices)
+                * Data type: torch.int32
+    """
+    assert(type(vertex_group) == type([]))
+    assert(type(index_group) == type([]))
+    assert(len(vertex_group) == len(index_group))
+    n = len(vertex_group)
+    for i in range(n):
+        assert(isinstance(vertex_group[i],torch.Tensor))
+        assert(vertex_group[i].is_contiguous())
+        assert(len(vertex_group[i].shape) == 2 and vertex_group[i].shape[1] == 3)
+        assert(vertex_group[i].dtype==torch.float32 and vertex_group[i].device.type != 'cpu')
+        loc_index = index_group[i]
+        if loc_index is not None:
+            assert(isinstance(loc_index, torch.Tensor))
+            assert(loc_index.is_contiguous())
+            assert(len(loc_index.shape) == 2 and loc_index.shape[1] == 3)
+            assert(loc_index.dtype==torch.int32 and loc_index.device.type != "cpu")
+
+    torch.cuda.set_device(vertex_group[0].device)
+    _backend.optixDist_load_mesh(vertex_group, index_group)
+
+def optixDist_destroy_mesh(device='cuda:0'):
+    torch.cuda.set_device(device)
+    _backend.optixDist_destroy_mesh()
+
+def optixDist_trace(rays_o, rays_d):
+    """
+    Computes ray-mesh intersection distances using OptiX acceleration.
+
+    Traces a grid of rays against preloaded geometry (via optixDist_load_mesh) and returns
+    the parametric distance t along each ray to the closest mesh intersection. Returns infinity
+    for rays that don't intersect any geometry. Supports batched ray operations.
+
+    Parameters:
+        rays_o (torch.Tensor): Ray origin coordinates in world space. Must satisfy:
+            - Shape: [N1, N2, 3] (Emits a total of N1 × N2 rays, organized in 2D grid, XYZ coordinates)
+            - Data type: torch.float32
+            - Device: Non-CPU (GPU) with contiguous memory layout
+
+        rays_d (torch.Tensor): Ray direction vectors. Must satisfy:
+            - Shape: [N1, N2, 3] (Same dimensions as rays_o)
+            - Data type: torch.float32
+            - Device: Non-CPU (GPU) with contiguous memory layout
+            - Recommended: Normalized vectors for accurate distance computation
+
+    Returns:
+        torch.Tensor: Parametric distance t along each ray where:
+            Intersection point = rays_o + rays_d * t
+            - Shape: [N1, N2] (Same batch/ray dimensions as input)
+            - Data type: torch.float32
+            - Values:
+                * t ≥ 0: Valid intersection distance
+                * torch.inf: No intersection detected
+                * Note: Returns the closest intersection when multiple exist
+    """
+    assert(len(rays_o.shape) == 3 and len(rays_d.shape) == 3)
+    assert(rays_o.shape[2] == 3 and rays_d.shape[2] == 3)
+    assert(rays_o.shape[0] == rays_d.shape[0] and rays_o.shape[1] == rays_d.shape[1])
+    assert(rays_o.dtype==torch.float32 and rays_d.dtype==torch.float32)
+    assert(rays_o.device.type != 'cpu' and rays_d.device.type != 'cpu')
+    assert(rays_o.is_contiguous() and rays_d.is_contiguous())
+
+    torch.cuda.set_device(rays_o.device)
+    return _backend.optixDist_trace(rays_o, rays_d)
+
+# OptixEnvmapVisibility
+def optixEnvmapVisibility_init(device='cuda:0',shader=0,fullupdate_step=0):
+    """
+    Initializes OptiX environment for environment map visibility computations with configurable acceleration strategies.
+
+    Prepares the OptiX ray tracing context for environment map visibility operations, setting the
+    execution device, ray tracing kernel strategy, and acceleration structure update policy.
+
+    Parameters:
+    -----------
+    device (str): CUDA device identifier. Default: 'cuda:0'
+    shader (int): Ray tracing kernel strategy. Options:
+        0 - Each thread processes one light probe
+        1 - Each thread processes 32 shadow rays
+        2 - Each thread processes 8 shadow rays
+        3 - Each thread processes 32 shadow rays for surface light probes (requires surface normal)
+    fullupdate_step (int): Acceleration structure rebuild policy:
+        ≤ 0: Disable dynamic updates (full rebuild every time)
+        > 0: Rebuild from scratch every N steps, dynamic updates in between
+
+    Recommendations:
+    ---------------
+    - For light probes in volume: Use mode 1
+    - For surface light probes: Use mode 3 (eliminates rays pointing inside objects)
+
+    Acceleration Structure Updates:
+    ------------------------------
+    The fullupdate_step parameter utilizes OptiX's dynamic update feature to enable faster
+    acceleration structure building when mesh topology remains constant while vertex
+    positions change. For technical details, refer to the OptiX Programming Guide.
+
+    Configuration behavior:
+    - fullupdate_step ≤ 0: Disables dynamic updates. Performs full rebuilds every update.
+      Recommended when loading entirely different models each update.
+    - fullupdate_step > 0: Implements hybrid rebuilding - full rebuild every N steps,
+      fast dynamic updates during intermediate steps.
+
+    Warning:
+    --------
+    Continuous dynamic updates may cause acceleration structure degradation, potentially
+    resulting in slower ray traversal performance and reduced intersection quality.
+    """
+    torch.cuda.set_device(device)
+    _backend.optixEnvmapVisibility_init(shader,fullupdate_step)
+
+def optixEnvmapVisibility_destroy(device='cuda:0'):
+    torch.cuda.set_device(device)
+    _backend.optixEnvmapVisibility_destroy()
+
+def optixEnvmapVisibility_load_mesh(vertex_group, index_group):
+    """
+    Loads mesh data into OptiX for environment map visibility computations.
+
+    Prepares geometry for accelerated ray tracing operations focused on environment visibility
+    queries. All meshes are uploaded to GPU and managed by OptiX acceleration structures.
+
+    Parameters:
+        vertex_group (list[torch.Tensor]): List of vertex buffers. Each element must be:
+            - A contiguous torch.Tensor on a CUDA device
+            - Shape: [V, 3] (V vertices with XYZ coordinates)
+            - Data type: torch.float32
+
+        index_group (list[torch.Tensor | None]): List of index buffers corresponding to vertices.
+            Each element must be either:
+            - None (indicating unindexed geometry)
+            - A contiguous torch.Tensor on a CUDA device with:
+                * Shape: [M, 3] (M triangles with vertex indices)
+                * Data type: torch.int32
+    """
+    assert(type(vertex_group) == type([]))
+    assert(type(index_group) == type([]))
+    assert(len(vertex_group) == len(index_group))
+    n = len(vertex_group)
+    for i in range(n):
+        assert(isinstance(vertex_group[i],torch.Tensor))
+        assert(vertex_group[i].is_contiguous())
+        assert(len(vertex_group[i].shape) == 2 and vertex_group[i].shape[1] == 3)
+        assert(vertex_group[i].dtype==torch.float32 and vertex_group[i].device.type != 'cpu')
+        loc_index = index_group[i]
+        if loc_index is not None:
+            assert(isinstance(loc_index, torch.Tensor))
+            assert(loc_index.is_contiguous())
+            assert(len(loc_index.shape) == 2 and loc_index.shape[1] == 3)
+            assert(loc_index.dtype==torch.int32 and loc_index.device.type != "cpu")
+
+    torch.cuda.set_device(vertex_group[0].device)
+    _backend.optixEnvmapVisibility_load_mesh(vertex_group, index_group)
+
+def optixEnvmapVisibility_destroy_mesh(device='cuda:0'):
+    torch.cuda.set_device(device)
+    _backend.optixEnvmapVisibility_destroy_mesh()
+
+def optixEnvmapVisibility_trace(rays_o, rays_n, rot_ray, envmap_width, envmap_height):
+    """
+    Launches environment map visibility computations.
+
+    Computes visibility of light probes across predefined environment map directions using OptiX
+    acceleration structures. Returns a compact bitfield indicating ray occlusion status.
+
+    Parameters:
+    -----------
+    rays_o (torch.Tensor): Ray origins for each light probe.
+        - Shape: (P, 3) where P = number of light probes
+        - Type: torch.float32
+        - Device: GPU (non-CPU)
+        - Memory: Contiguous
+
+    rays_n (torch.Tensor, optional): Surface normals for each probe.
+        - Can be None for non-surface shader modes (0-2)
+        - Required only for shader mode 3 (surface probes)
+        - Shape: (P, 3) when provided
+        - Type: torch.float32
+        - Device: GPU (non-CPU)
+        - Memory: Contiguous
+
+    rot_ray (torch.Tensor): Rotation matrix for ray direction transformation.
+        - Shape: (3, 3) in row-major order
+        - Type: torch.float32
+        - Device: CPU or GPU
+        - Memory: Contiguous
+
+    envmap_width (int): Horizontal resolution of environment map
+    envmap_height (int): Vertical resolution of environment map
+
+    Returns:
+    --------
+    torch.Tensor: Visibility bitfield tensor
+        - Shape: (N, P) where N = ceil(envmap_width * envmap_height / 32)
+        - Type: torch.int32
+        - Device: GPU
+        - Encoding:
+            - Each bit represents one shadow ray (0 = occluded, 1 = visible)
+            - Rays ordered in row-major format (left-to-right, top-to-bottom)
+            - Packed LSB-first within 32-bit integers
+    """
+    assert(len(rays_o.shape) == 2)
+    assert(rays_o.shape[1] == 3)
+    assert(rays_o.dtype == torch.float32 and rot_ray.dtype == torch.float32)
+    #assert(rays_o.device.type != 'cpu' and rot_ray.device.type == 'cpu')
+    assert(rays_o.device.type != 'cpu') # support both cpu & cuda
+    assert(rays_o.is_contiguous() and rot_ray.is_contiguous())
+
+    if rays_n is not None:
+        assert(len(rays_n.shape) == 2)
+        assert(rays_n.shape[1] == 3)
+        assert(rays_n.dtype == torch.float32)
+        assert(rays_n.device.type != 'cpu')
+        assert(rays_n.is_contiguous())
+
+    torch.cuda.set_device(rays_o.device)
+    return _backend.optixEnvmapVisibility_trace(rays_o, rays_n, rot_ray, envmap_width, envmap_height)
+
+
+
+
+
+
+
+
+
+
+
+

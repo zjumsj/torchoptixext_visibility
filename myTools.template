@@ -1,0 +1,390 @@
+#include "myTools.h"
+#include <fstream>
+#include <sstream>
+#include <exception>
+#include <nvrtc.h>
+#include <vector>
+#include <iterator>
+#include <map>
+#include <string.h>
+
+//#include "../GLTest_glfw/imgui/dirent/dirent.h"
+//#include "dirent.h" // NOTE: should remove this for linux compatibility ??
+
+//#include <sutil/Exception.h>
+#include "ExceptionLocal.h"
+//#include <optixu/optixpp_namespace.h>
+
+bool myTools::readSourceFile(std::string& str, const std::string& filename)
+{
+	// Try to open file
+	std::ifstream file(filename.c_str());
+	if (file.good())
+	{
+		// Found usable source file
+		std::stringstream source_buffer;
+		source_buffer << file.rdbuf();
+		str = source_buffer.str();
+		//file.close(); // not needed, let destroyer do the thing.
+		return true;
+	}
+	return false;
+}
+
+bool myTools::isValidFile(const char * filename)
+{
+	std::ifstream file(filename);
+	file.open(filename);
+	bool flag = file.good();
+	return flag;
+}
+
+bool myTools::is_root_path(const char * filename)
+{
+	if (strlen(filename) < 2)
+		return false;
+	if ((filename[0] >= 'a' && filename[0] <= 'z') ||
+		(filename[0] >= 'A' && filename[0] <= 'Z'))
+	{
+		if (filename[1] == ':')
+			return true;
+	}
+	return false;
+}
+
+std::string myTools::to_lower(const std::string & s) {
+
+	std::string out = s;
+	size_t N = out.length();
+	for (size_t i = 0; i < N; i++) {
+		if (out[i] >= 'A' && out[i] <= 'Z') {
+			out[i] = (unsigned char)(int(out[i]) - 65 + 97);
+		}
+	}
+	return out;
+}
+
+std::string myTools::cat_path(const char * path, const char * file)
+{
+	size_t len = strlen(path);
+	size_t len2 = strlen(file);
+	bool add_flag = true;
+	if (len > 0) {
+		if (path[len - 1] == '\\' || path[len - 1] == '/')
+			add_flag = false;
+	}
+	else
+		add_flag = false;
+	std::string out;
+	out.resize(len + len2 + (add_flag ? 1 : 0));
+	size_t idx = 0;
+	while (idx < len) {
+		out[idx] = path[idx];
+		idx++;
+	}
+	if (add_flag)
+		out[idx++] = '/';
+	size_t idx_ = 0;
+	while (idx_ < len2) {
+		out[idx++] = file[idx_++];
+	}
+	return out;
+}
+
+static int find_lastSlash(const char * filename) {
+	int ans = -1;
+	const char * f = filename;
+	int pos = 0;
+	while (*f) {
+		if (*f == '\\' || *f == '/')
+			ans = pos;
+		f++; pos++;
+	}
+	return ans;
+}
+
+void myTools::path_split(const char * filename, char * path, char * file) {
+	int slash_pos = find_lastSlash(filename);
+	// copy path
+	int idx = 0;
+	for (; idx < slash_pos; idx++) {
+		path[idx] = filename[idx];
+	}
+	path[idx] = 0;
+	// copy file
+	idx = slash_pos + 1;
+	int i = 0;
+	while (filename[idx]) {
+		file[i++] = filename[idx++];
+	}
+	file[i] = 0;
+}
+
+
+//void myTools::createDirectoryRecursively(const std::string &directory) {
+//	//static const std::wstring separators(L"\\/");
+//	static const std::string separators("\\/");
+//
+//	// If the specified directory name doesn't exist, do our thing
+//	DWORD fileAttributes = ::GetFileAttributesA(directory.c_str());
+//	if (fileAttributes == INVALID_FILE_ATTRIBUTES) {
+//
+//		// Recursively do it all again for the parent directory, if any
+//		std::size_t  slashIndex = directory.find_last_of(separators);
+//		if (slashIndex != std::wstring::npos) {
+//			createDirectoryRecursively(directory.substr(0, slashIndex));
+//		}
+//
+//		// Create the last directory on the path (the recursive calls will have taken
+//		// care of the parent directories by now)
+//		BOOL result = ::CreateDirectoryA(directory.c_str(), nullptr);
+//		if (result == FALSE) {
+//			throw std::runtime_error("Could not create directory");
+//		}
+//
+//	}
+//	else { // Specified directory name already exists as a file or directory
+//
+//		bool isDirectoryOrJunction =
+//			((fileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) ||
+//			((fileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0);
+//
+//		if (!isDirectoryOrJunction) {
+//			throw std::runtime_error(
+//				"Could not create directory because a file with the same name exists"
+//			);
+//		}
+//
+//	}
+//}
+
+//std::vector<std::string> myTools::getFilenameInDirectory(const char * dirname, int flag) {
+//
+//	std::vector<std::string> output;
+//
+//	DIR *dir;
+//	struct dirent *ent;
+//	struct stat s;
+//	char buffer[256];
+//
+//	if ((dir = opendir(dirname)) != NULL) {
+//		/* print all the files and directories within directory */
+//		while ((ent = readdir(dir)) != NULL) {
+//
+//			//printf("%s\n", ent->d_name);
+//			std::string _locn = ent->d_name;
+//
+//			// remove . && .. 
+//			if (_locn.length() == 1 && _locn[0] == '.')
+//				continue;
+//			else if (_locn.length() == 2 && _locn[0] == '.' && _locn[1] == '.')
+//				continue;
+//			else {
+//				std::string full_name = myTools::cat_path(dirname, _locn.c_str());
+//				if (stat(full_name.c_str(), &s) == 0) {
+//					if (flag == 1) { // keep directory
+//						if (!(s.st_mode & S_IFDIR)) { // not directory
+//							continue;
+//						}
+//					}
+//					else if (flag == 2) { // keep file
+//						if (!(s.st_mode & S_IFREG)) { // not file
+//							continue;
+//						}
+//					}
+//				}
+//				else {
+//					sprintf_s(buffer, "Unknown error when stat file %s", full_name.c_str());
+//					throw std::runtime_error(buffer);
+//				}
+//			}
+//			output.push_back(_locn);
+//		}
+//		closedir(dir);
+//	}
+//	else {
+//		/* could not open directory */
+//		throw std::runtime_error(
+//			"Could not read directory"
+//		);
+//	}
+//	return std::move(output);
+//}
+
+//////////////////////////////
+
+// Include directories
+#define SAMPLES_RELATIVE_INCLUDE_DIRS \
+  "cuda", \
+  "sutil", \
+  "lib/optixPaging/include", \
+  "lib/DemandLoading/include", \
+  ".", 
+
+#define SAMPLES_ABSOLUTE_INCLUDE_DIRS \
+  "OPTIX_INSTALL_PATH_SDK", \
+  "OPTIX_INSTALL_PATH_INCLUDE", \
+  "CUDA_INSTALL_PATH_INCLUDE",
+
+// Signal whether to use NVRTC or not
+#define CUDA_NVRTC_ENABLED 1
+
+// NVRTC compiler options
+#define CUDA_NVRTC_OPTIONS  \
+  "-std=c++11", \
+  "-arch", \
+  "compute_60", \
+  "-use_fast_math", \
+  "-lineinfo", \
+  "-default-device", \
+  "-rdc", \
+  "true", \
+  "-D__x86_64",
+
+#define STRINGIFY( x ) STRINGIFY2( x )
+#define STRINGIFY2( x ) #x
+#define LINE_STR STRINGIFY( __LINE__ )
+
+// Error check/report helper for users of the C API
+#define NVRTC_CHECK_ERROR( func )                                                                                           \
+    do                                                                                                                      \
+    {                                                                                                                       \
+        nvrtcResult code = func;                                                                                            \
+        if( code != NVRTC_SUCCESS )                                                                                         \
+            throw std::runtime_error( "ERROR: " __FILE__ "(" LINE_STR "): " + std::string( nvrtcGetErrorString( code ) ) ); \
+    } while( 0 )
+
+static std::string g_nvrtcLog;
+struct PtxSourceCache {
+	std::map<std::string, std::string*> map;
+	~PtxSourceCache()
+	{
+		for (std::map<std::string, std::string*>::const_iterator it = map.begin(); it != map.end(); ++it)
+			delete it->second;
+	}
+};
+static PtxSourceCache g_ptxSourceCache;
+
+static void getPtxStringFromFile(std::string & ptx, const char * filename, 
+	const std::vector<std::string> * macro = nullptr, const std::string * cur_path = nullptr
+) {
+
+	std::string content;//cu_source
+	bool status = myTools::readSourceFile(content, std::string(filename));
+	if (status == false) {
+		std::string name_ = "Couldn't open source file " + std::string(filename);
+		throw sutil::Exception(name_.c_str());
+		
+	}
+	// copy from getPtxFromCuString
+
+	// Create program
+
+	nvrtcProgram prog = 0;
+	NVRTC_CHECK_ERROR(nvrtcCreateProgram(&prog, content.c_str(), filename, 0, NULL, NULL));
+	//NVRTC_CHECK_ERROR(nvrtcCreateProgram(&prog, cu_source, name, 0, NULL, NULL));
+
+	// Gather NVRTC options
+	std::vector<const char*> options;
+
+	//const std::string base_dir = getSampleDir();
+	std::string base_dir = ".";
+
+	// Set sample dir as the primary include path
+	std::string sample_dir;
+	//if (sample_name)
+	//{
+	//	sample_dir = std::string("-I") + base_dir + '/' + sample_name;
+	//	options.push_back(sample_dir.c_str());
+	//}
+	if (myTools::is_root_path(filename))
+		sample_dir = std::string("-I") + filename;
+	else
+		sample_dir = std::string("-I") + base_dir + "/" + filename;
+	options.push_back(sample_dir.c_str());
+
+	// Collect include dirs
+	std::vector<std::string> include_dirs;
+	const char*              abs_dirs[] = { SAMPLES_ABSOLUTE_INCLUDE_DIRS };
+	const char*              rel_dirs[] = { SAMPLES_RELATIVE_INCLUDE_DIRS };
+
+	for (const char* dir : abs_dirs)
+	{
+		include_dirs.push_back(std::string("-I") + dir);
+	}
+	for (const char* dir : rel_dirs)
+	{
+		include_dirs.push_back("-I" + base_dir + '/' + dir);
+	}
+	if (cur_path && !(cur_path->empty())) {
+		include_dirs.push_back("-I" + (*cur_path));
+	}
+	for (const std::string& dir : include_dirs)
+	{
+		options.push_back(dir.c_str());
+	}
+
+	// Add MACRO if any
+	std::vector<std::string> macros;
+	if (macro) {
+		size_t n_macro = macro->size();
+		macros.resize(n_macro);
+		for (size_t i = 0; i < n_macro; i++) {
+			macros[i] = std::string("-D") + (*macro)[i];
+		}
+		for (const std::string & macro_ : macros) {
+			options.push_back(macro_.c_str());
+		}
+	}
+
+	// Collect NVRTC options
+	const char*  compiler_options[] = { CUDA_NVRTC_OPTIONS };
+	std::copy(std::begin(compiler_options), std::end(compiler_options), std::back_inserter(options));
+
+
+	// JIT compile CU to PTX
+	const nvrtcResult compileRes = nvrtcCompileProgram(prog, (int)options.size(), options.data());
+
+	// Retrieve log output
+	size_t log_size = 0;
+	NVRTC_CHECK_ERROR(nvrtcGetProgramLogSize(prog, &log_size));
+	g_nvrtcLog.resize(log_size);
+	if (log_size > 1)
+	{
+		NVRTC_CHECK_ERROR(nvrtcGetProgramLog(prog, &g_nvrtcLog[0]));
+		//if (log_string)
+		//	*log_string = g_nvrtcLog.c_str();
+	}
+	if (compileRes != NVRTC_SUCCESS)
+		throw std::runtime_error("NVRTC Compilation failed.\n" + g_nvrtcLog);
+
+	// Retrieve PTX code
+	size_t ptx_size = 0;
+	NVRTC_CHECK_ERROR(nvrtcGetPTXSize(prog, &ptx_size));
+	ptx.resize(ptx_size);
+	NVRTC_CHECK_ERROR(nvrtcGetPTX(prog, &ptx[0]));
+
+	// Cleanup
+	NVRTC_CHECK_ERROR(nvrtcDestroyProgram(&prog));
+}
+
+const char * myTools::getPtxString(const char * filename, const std::vector<std::string> * macro, const std::string * cur_path)
+{
+	std::string * ptx;
+	std::string key = std::string(filename);
+	if (macro) {
+		for (size_t i_macro = 0; i_macro < macro->size(); i_macro++) {
+			key = key + ";" + (*macro)[i_macro];
+		}
+	}
+	std::map<std::string, std::string*>::iterator elem = g_ptxSourceCache.map.find(key);
+	if (elem == g_ptxSourceCache.map.end()) {
+		ptx = new std::string();
+		getPtxStringFromFile(*ptx, filename, macro, cur_path);
+		g_ptxSourceCache.map[key] = ptx;
+	}
+	else {
+		ptx = elem->second;
+	}
+	return ptx->c_str();
+}
