@@ -1,5 +1,7 @@
 # Pytorch Extension using OptiX for Visibility 
 
+![teaser](./assets/teaser.jpg)  
+
 This project is an efficient and easy-to-use PyTorch library that provides GPU-accelerated visibility computation powered by NVIDIA OptiX, only for **research purposes**.
 
 This library facilitates visibility calculations for differentiable rendering applications. Data is passed directly through torch tensors residing on GPU, eliminating unnecessary CPU-GPU transfer overhead.
@@ -58,9 +60,9 @@ export OPTIX_VERSION="7.4.0"
 export CUDA_PATH="/usr/local/cuda-11.8"
 
 # Windows example (Command Prompt)
-set OPTIX_PATH="C:\ProgramData\NVIDIA Corporation\Optix SDK 7.4.0"
-set OPTIX_VERSION="7.4.0"
-set CUDA_PATH="C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.8"
+set OPTIX_PATH=C:\ProgramData\NVIDIA Corporation\Optix SDK 7.4.0
+set OPTIX_VERSION=7.4.0
+set CUDA_PATH=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.8
 ```
 
 5. Clone and install
@@ -111,7 +113,7 @@ Please kindly cite our repository and preceding paper if you find our software o
     title={Pytorch Extension using OptiX for Visibility},
     author={Ma, Shengjie},
     year={2025},
-    mouth={aug},
+    month={aug},
     url={https://github.com/zjumsj/torchoptixext_visibility}
 }
 ```
